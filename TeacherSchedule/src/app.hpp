@@ -14,6 +14,7 @@
 // ############################################################## //
 
 #include <string_converter.hpp>
+#include <core.hpp>
 
 #include <rapidcsv.h>
 
@@ -35,48 +36,6 @@ const size_t CELL_OFFSET_TO_NOT_EVEN_AUDITORIUM = 3;
 const size_t CELL_OFFSET_TO_EVEN_AUDITORIUM = 10;
 const size_t CELL_OFFSET_TO_NOT_EVEN_TIME = 2;
 const size_t CELL_OFFSET_TO_EVEN_TIME = 11;
-
-class TeacherLessonInfo {
-public:
-	TeacherLessonInfo(std::wstring_view teacher_name, std::wstring_view subject_name, std::wstring_view subject_type, unsigned day, std::wstring_view time, bool is_even_week, unsigned auditorium_number) :
-		teacher_name{ teacher_name }, subject_name{ subject_name }, subject_type{ subject_type },  day{ day }, time{ time }, is_even_week{ is_even_week }, auditorium_number{ auditorium_number } {}
-
-	const std::wstring GetTeacherName() const {
-		return teacher_name;
-	}
-
-	const std::wstring GetSubjectName() const {
-		return subject_name;
-	}
-
-	const std::wstring GetSubjectType() const {
-		return subject_type;
-	}
-
-	const unsigned GetDay() const {
-		return day;
-	}
-
-	const std::wstring GetTime() const {
-		return time;
-	}
-
-	const bool IsEvenWeek() const {
-		return is_even_week;
-	}
-
-	const unsigned GetAuditorium() const {
-		return auditorium_number;
-	}
-private:
-	std::wstring teacher_name;
-	std::wstring subject_name;
-	std::wstring subject_type;
-	unsigned day;
-	std::wstring time;
-	bool is_even_week = false;
-	unsigned auditorium_number;
-};
 
 class TableWeekMarkup {
 public:
@@ -158,14 +117,14 @@ TableWeekMarkup MarkupTable(std::string_view input_table_file) {
 	}
 }
 
-std::vector<TeacherLessonInfo> GetTeacherLessons(std::wstring_view teacher_name, const TableWeekMarkup & week_markup) {
+std::vector<core::TeacherLessonInfo> GetTeacherLessons(std::wstring_view teacher_name, const TableWeekMarkup & week_markup) {
 	if (fs::exists(week_markup.GetTablePath())) {
 		rapidcsv::Document doc;
 		doc.Load(week_markup.GetTablePath().string(), rapidcsv::LabelParams(-1, -1), rapidcsv::SeparatorParams(';'));
 
 		default_converter converter;
 
-		std::vector<TeacherLessonInfo> teacher_lessons;
+		std::vector<core::TeacherLessonInfo> teacher_lessons;
 
 		for (int day_idx = 0; day_idx < WORK_DAYS_COUNT; ++day_idx) {
 			for (int half_pair_idx = 0; half_pair_idx < (2 * DAY_PAIRS_COUNT); ++half_pair_idx) {
