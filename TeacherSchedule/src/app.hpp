@@ -37,13 +37,20 @@ const size_t CELL_OFFSET_TO_EVEN_AUDITORIUM = 10;
 const size_t CELL_OFFSET_TO_NOT_EVEN_TIME = 2;
 const size_t CELL_OFFSET_TO_EVEN_TIME = 11;
 
+struct Vector2 {
+public:
+	int x, y;
+};
+
+using DayPos = Vector2;
+
 class TableWeekMarkup {
 public:
 	explicit TableWeekMarkup(fs::path table_path) : table_path{ table_path } {
-		std::fill(days_cells, days_cells+app::WORK_DAYS_COUNT, std::pair<int,int>(-1,-1));
+		std::fill(days_cells, days_cells + app::WORK_DAYS_COUNT, DayPos{-1, -1});
 	}
 
-	TableWeekMarkup(fs::path table_path, std::pair<int, int>days_cells[WORK_DAYS_COUNT]) : table_path{ table_path } {
+	TableWeekMarkup(fs::path table_path, DayPos days_cells[WORK_DAYS_COUNT]) : table_path{ table_path } {
 		for (int day_cell_idx = 0; day_cell_idx < WORK_DAYS_COUNT; ++day_cell_idx) {
 			this->days_cells[day_cell_idx] = days_cells[day_cell_idx];
 		}
@@ -58,7 +65,7 @@ public:
 	}
 private:
 	fs::path table_path;
-	std::pair<int, int> days_cells[WORK_DAYS_COUNT];
+	DayPos days_cells[WORK_DAYS_COUNT];
 };
 
 TableWeekMarkup MarkupTable(std::string_view input_table_file) {
@@ -71,8 +78,8 @@ TableWeekMarkup MarkupTable(std::string_view input_table_file) {
 	if (fs::exists(input_file_path)) {
 		rapidcsv::Document doc(input_file_path.string(), rapidcsv::LabelParams(-1,-1), rapidcsv::SeparatorParams(';'));
 
-		std::pair<int, int> days_cells[WORK_DAYS_COUNT];
-		std::fill(days_cells, days_cells+WORK_DAYS_COUNT, std::pair<int,int>(-1, -1));
+		DayPos days_cells[WORK_DAYS_COUNT];
+		std::fill(days_cells, days_cells + WORK_DAYS_COUNT, DayPos{ -1, -1 });
 
 		unsigned curr_day = 0;
 		int column_idx = 0;
@@ -128,8 +135,8 @@ std::vector<core::TeacherLessonInfo> GetTeacherLessons(std::wstring_view teacher
 
 		for (int day_idx = 0; day_idx < WORK_DAYS_COUNT; ++day_idx) {
 			for (int half_pair_idx = 0; half_pair_idx < (2 * DAY_PAIRS_COUNT); ++half_pair_idx) {
-				int week_day_column = week_markup.GetDaysCells()[day_idx].first;
-				int week_day_row = week_markup.GetDaysCells()[day_idx].second;
+				int week_day_column = week_markup.GetDaysCells()[day_idx].x;
+				int week_day_row = week_markup.GetDaysCells()[day_idx].y;
 
 				std::wstring not_even_teacher_name = converter.from_bytes(
 					doc.GetCell<std::string>(week_day_column + CELL_OFFSET_TO_NOT_EVEN_TEACHER_NAME, week_day_row + half_pair_idx)
