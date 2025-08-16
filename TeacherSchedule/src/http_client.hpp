@@ -26,77 +26,81 @@ namespace urls = boost::urls;
 namespace sys = boost::system;
 using tcp = net::ip::tcp;
 
-template <typename RequestBody, typename RequestFields, typename ResponseBody, typename ResponseFields>
-class HttpClient : public std::enable_shared_from_this<HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>> {
-
-using Request = http::request<RequestBody, RequestFields>;
-using Response = http::response<ResponseBody, ResponseFields>;
-
-using RequestHandle = std::function<void(Response)>;
-
+class HttpClientBase {
 public:
-//	* Create
-	static std::shared_ptr<HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>> Create(
-		net::io_context & io,
-		urls::url url,
-		ssl::context & ctx,
-		Request request,
-		Response response,
-		RequestHandle request_handler
-	) {
-
-		return std::make_shared<HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>>(io, url, ctx, std::move(request), std::move(response), request_handler);
-
-	}
+//	* Get thiss class ptr virtual method
+	virtual std::shared_ptr<HttpClientBase> GetPtr() = 0;
 
 //	* Constuctor
-	HttpClient(net::io_context & io, urls::url url, ssl::context & ctx, Request request, Response response, RequestHandle request_handler)
-	: resolver_{io}, url_{url}, ssl_stream_{io, ctx}, request_{request}, response_{std::move(response)}, read_buff_{}, request_handler_{request_handler} {
-
+	HttpClientBase(net::io_context & io, const urls::url & url, ssl::context & ctx)
+	: resolver_{io}, url_{url}, ssl_stream_{io, ctx} {
 		std::string host = url.host().c_str();
-
+		
 		if (!SSL_set_tlsext_host_name(ssl_stream_.native_handle(), host.c_str())) {
 			sys::error_code ec{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
 			throw sys::system_error{ec};
 		}
+	}
 
-	}
-	
-	std::shared_ptr<HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>> GetPtr() {
-		return this->shared_from_this();
-	}
-	
-	void SendRequest() {
-		resolver_.async_resolve(url_.host(), "https", boost::bind(&HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>::HandleResolveAsync, GetPtr(), net::placeholders::error, net::placeholders::results));
-	}
-private:
+protected:
+	virtual void Write() = 0;
+	virtual void Read() = 0;
+	virtual void HandleRequest() = 0;
+
 //	* Resolve handler method
-	void HandleResolveAsync(const sys::error_code & ec, tcp::resolver::results_type results) {
+	void OnResolve(const sys::error_code & ec, tcp::resolver::results_type results) {
 		if (!ec) {
-			// net::async_connect(	ssl_stream_.lowest_layer(),
-			// 					results.begin(),
-			// 					results.end(),
-			// 					boost::bind(&HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>::HandleConnectAsync, this->shared_from_this(), net::placeholders::error, net::placeholders::iterator));
-
 			net::async_connect(	ssl_stream_.lowest_layer(),
 								results.begin(),
 								results.end(),
-								boost::bind(&HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>::HandleConnectAsync, GetPtr(), net::placeholders::error));
+								[self = GetPtr()] (const sys::error_code & ec, auto endpoints) {
+									self->OnConnect(ec);
+								});
 		} else {
-			std::cerr << "Resolving error: " << ec.what() << std::endl;
+			throw std::runtime_error(ec.what());
 		}
  	}
 
 //	* Connect handler method
-	// void HandleConnectAsync(const sys::error_code & ec, std::vector<tcp::endpoint>::iterator iterator) {
-	void HandleConnectAsync(const sys::error_code & ec) {
+	void OnConnect(const sys::error_code & ec) {
 		if (!ec) {
 			ssl_stream_.set_verify_mode(ssl::verify_peer);
-			ssl_stream_.set_verify_callback(boost::bind(&HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>::PreverifyCertificate, GetPtr(), _1, _2));
+			ssl_stream_.set_verify_callback([self = GetPtr()] (bool preverified, ssl::verify_context & ctx) {
+				return self->PreverifyCertificate(preverified, ctx);
+			});
 			
-			ssl_stream_.async_handshake(ssl::stream_base::client, boost::bind(&HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>::HandleHandshakeAsync, GetPtr(), net::placeholders::error));
+			ssl_stream_.async_handshake(ssl::stream_base::client, [self = GetPtr()] (const sys::error_code & ec) {
+				self->OnHandshake(ec);
+			});
 		} else {
-			std::cerr << "Connection error: " << ec.what() << std::endl;
+			throw std::runtime_error(ec.what());
+		}
+	}
+
+//	* Handshake handler method
+	void OnHandshake(const sys::error_code & ec) {
+		if (!ec) {
+			Write();
+		} else {
+			throw std::runtime_error(ec.what());
+		}
+	}
+
+//	* Write handler method
+	void OnWrite(const sys::error_code & ec, std::size_t transferred_bytes) {
+		if (!ec) {
+			Read();
+		} else {
+			throw std::runtime_error(ec.what());
+		}
+	}
+
+//	* Read handler method
+	void OnRead(const sys::error_code & ec, std::size_t transferred_bytes) {
+		if (!ec) {
+			HandleRequest();
+		} else {
+			throw std::runtime_error(ec.what());
 		}
 	}
 
@@ -111,41 +115,66 @@ private:
 
 		return preverified;
 	}
-
-//	* Handshake handler method
-	void HandleHandshakeAsync(const sys::error_code & ec) {
-		if (!ec) {
-			http::async_write(ssl_stream_, request_, boost::bind(&HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>::HandleWriteAsync, GetPtr(), net::placeholders::error));
-		} else {
-			std::cerr << "Handshake error: " << ec.what() << std::endl;
-		}
-	}
-
-//	* Write handler method
-	void HandleWriteAsync(const sys::error_code & ec) {
-		if (!ec) {
-			http::async_read(ssl_stream_, read_buff_, response_, boost::bind(&HttpClient<RequestBody, RequestFields, ResponseBody, ResponseFields>::HandleReadAsync, GetPtr(), net::placeholders::error, net::placeholders::bytes_transferred));
-		} else {
-			std::cerr << "Write error:" << ec.what() << std::endl;
-		}
-	}
-
-//	* Read handler method
-	void HandleReadAsync(const sys::error_code & ec, std::size_t transferred_bytes) {
-		if (!ec) {
-			request_handler_(std::move(response_));
-		} else {
-			std::cerr << "Read error: " << ec.what() << std::endl;
-		}
-	}
-
+	
 	tcp::resolver resolver_;
 	urls::url url_;
 	ssl::stream<tcp::socket> ssl_stream_;
-	Request request_;
-	Response response_;
+};
+
+template <typename Request, typename Response, typename Handler>
+class HttpClient : public HttpClientBase, public std::enable_shared_from_this<HttpClient<Request, Response, Handler>> {
+
+public:
+//	* Create
+	static std::shared_ptr<HttpClient> Create(
+		net::io_context & io,
+		const urls::url & url,
+		ssl::context & ctx,
+		Request req,
+		Response res,
+		Handler handler
+	) {
+		
+		return std::make_shared<HttpClient<Request, Response, Handler>>(io, url, ctx, std::move(req), std::move(res), std::move(handler));
+
+	}
+	
+//	* Constuctor
+	HttpClient(net::io_context & io, const urls::url & url, ssl::context & ctx, Request req, Response res, Handler handler)
+	: HttpClientBase{io, url, ctx}, req_{std::move(req)}, res_{std::move(res)}, handler_{std::move(handler)} {}
+
+//	* Get this class ptr method
+	std::shared_ptr<HttpClientBase> GetPtr() override {
+		return this->shared_from_this();
+	}
+	
+	void SendRequest() {
+		resolver_.async_resolve(url_.host(), "https", [self = this->shared_from_this()] (const sys::error_code & ec, tcp::resolver::results_type results) {
+			self->OnResolve(ec, results);
+		});
+	}
+
+protected:
+	void Write() override {
+		http::async_write(ssl_stream_, req_, [self = this->shared_from_this()] (const sys::error_code & ec, size_t bytes_transferred) {
+			self->OnWrite(ec, bytes_transferred);
+		});
+	}
+
+	void Read() override {
+		http::async_read(ssl_stream_, read_buff_, res_, [self = this->shared_from_this()] (const sys::error_code & ec, size_t bytes_transferred) {
+			self->OnRead(ec, bytes_transferred);
+		});
+	}
+
+	void HandleRequest() override {
+		handler_(std::move(res_));
+	}
+private:
+	Request req_;
+	Response res_;
+	Handler handler_;
 	beast::flat_buffer read_buff_;
-	RequestHandle request_handler_;
 };
 
 } // namespace http_client
