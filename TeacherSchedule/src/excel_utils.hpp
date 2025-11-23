@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <algorithm>
 
+#include <boost/algorithm/string/replace.hpp>
+
 #include <xlnt/xlnt.hpp>
 
 namespace fs = std::filesystem;
@@ -28,7 +30,7 @@ void ConvertExcelToCsv(std::string_view input_excel_file, std::string_view outpu
 	if (fs::exists(input_path) && fs::exists(output_dir_path)) {
 //	*	* Check output directory path 
 		if (output_dir_path.has_extension()) {
-			throw std::exception("Invalid output directory path");
+			throw std::logic_error("Invalid output directory path");
 		}
 //	*	* Check input file
 		unsigned supported_excel_formats_count = sizeof(SUPPORTED_EXCEL_FILE_FORMATS)/sizeof(SUPPORTED_EXCEL_FILE_FORMATS[0]);
@@ -36,7 +38,7 @@ void ConvertExcelToCsv(std::string_view input_excel_file, std::string_view outpu
 		auto seff_begin = SUPPORTED_EXCEL_FILE_FORMATS;
 		auto seff_end = SUPPORTED_EXCEL_FILE_FORMATS + supported_excel_formats_count;
 		if (std::find_if(seff_begin, seff_end, [&input_file_extension](const char * const str) { return std::strcmp(input_file_extension.c_str(), str);}) == seff_end) {
-			throw std::exception("Invalid input excel file format");
+			throw std::logic_error("Invalid input excel file format");
 		}
 
 //	*	* Format output directory path (add "/" in the end)
@@ -45,7 +47,7 @@ void ConvertExcelToCsv(std::string_view input_excel_file, std::string_view outpu
 		}
 
 		xlnt::workbook wb;
-		wb.load(input_path.c_str());
+		wb.load(input_path.string());
 		for (int sheet_idx = 0; sheet_idx < wb.sheet_count(); ++sheet_idx) {
 			auto ws = wb.sheet_by_index(sheet_idx);
 
@@ -57,21 +59,26 @@ void ConvertExcelToCsv(std::string_view input_excel_file, std::string_view outpu
 			output_csv_file_path.replace_extension("csv");
 			std::ofstream ofs(output_csv_file_path);
 
-			for (auto row : ws.rows(true)) {
-				std::stringstream ss;
+			std::stringstream ss;
+			for (auto row : ws.rows(false)) {
 				for (auto cell : row) {
 					std::string value = cell.to_string();
+					
+					boost::replace_all(value, "\"", "\\\"");
 
 					ss << value << ';';
 				}
+				ss << "\n";
 			}
+
+			ofs << ss.str();
 
 			ofs.close();
 		}
-	} else if (fs::exists(input_path)) {
-		throw std::exception("Couldn't find input file");
-	} else if (fs::exists(output_dir_path)) {
-		throw std::exception("Couldn't find output directory");
+	} else if (!fs::exists(input_path)) {
+		throw std::logic_error("Couldn't find input file:" + input_path.string());
+	} else if (!fs::exists(output_dir_path)) {
+		throw std::logic_error("Couldn't find output directory: " + output_dir_path.string());
 	}
 }
 

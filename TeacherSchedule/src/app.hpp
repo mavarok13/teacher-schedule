@@ -24,7 +24,7 @@ namespace app {
 
 constexpr unsigned WORK_DAYS_COUNT = 6u;
 constexpr unsigned DAY_PAIRS_COUNT = 8u;
-const std::wstring DAYS_NAMES[WORK_DAYS_COUNT]{L"œÕ", L"¬“", L"—–", L"◊“", L"œ“", L"—¡"};
+const std::wstring DAYS_NAMES[WORK_DAYS_COUNT]{L"–ü–ù", L"–í–¢", L"–°–†", L"–ß–¢", L"–ü–¢", L"–°–ë"};
 
 const size_t CELL_OFFSET_TO_NOT_EVEN_TEACHER_NAME = 5;
 const size_t CELL_OFFSET_TO_EVEN_TEACHER_NAME = 8;
@@ -120,7 +120,7 @@ TableWeekMarkup MarkupTable(std::string_view input_table_file) {
 		TableWeekMarkup tw_markup{input_file_path, days_cells};
 		return tw_markup;
 	} else {
-		throw std::exception("File doesn't exist");
+		throw std::logic_error("File doesn't exist");
 	}
 }
 
@@ -159,7 +159,9 @@ std::vector<core::TeacherLessonInfo> GetTeacherLessons(std::wstring_view teacher
 						doc.GetCell<std::string>(week_day_column + CELL_OFFSET_TO_NOT_EVEN_TIME, week_day_row + half_pair_idx)
 					);
 					bool is_even_week = false;
-					unsigned auditorium_number = doc.GetCell<unsigned>(week_day_column + CELL_OFFSET_TO_NOT_EVEN_AUDITORIUM, week_day_row + half_pair_idx);
+					std::wstring auditorium_number = converter.from_bytes(
+						doc.GetCell<std::string>(week_day_column + CELL_OFFSET_TO_NOT_EVEN_AUDITORIUM, week_day_row + half_pair_idx)
+					);
 
 					teacher_lessons.emplace_back(not_even_teacher_name, subject_name, subject_type, day, time, is_even_week, auditorium_number);
 				}
@@ -176,7 +178,9 @@ std::vector<core::TeacherLessonInfo> GetTeacherLessons(std::wstring_view teacher
 						doc.GetCell<std::string>(week_day_column + CELL_OFFSET_TO_EVEN_TIME, week_day_row + half_pair_idx)
 					);
 					bool is_even_week = true;
-					unsigned auditorium_number = doc.GetCell<unsigned>(week_day_column + CELL_OFFSET_TO_EVEN_AUDITORIUM, week_day_row + half_pair_idx);
+					std::wstring auditorium_number = converter.from_bytes(
+						doc.GetCell<std::string>(week_day_column + CELL_OFFSET_TO_EVEN_AUDITORIUM, week_day_row + half_pair_idx)
+					);
 
 					teacher_lessons.emplace_back(even_teacher_name, subject_name, subject_type, day, time, is_even_week, auditorium_number);
 				}
@@ -187,7 +191,7 @@ std::vector<core::TeacherLessonInfo> GetTeacherLessons(std::wstring_view teacher
 
 		return teacher_lessons;
 	} else {
-		throw std::exception("Couldn't find file");
+		throw std::logic_error("Couldn't find file");
 	}
 }
 

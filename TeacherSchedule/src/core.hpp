@@ -6,7 +6,7 @@ namespace core {
 
 class TeacherLessonInfo {
 public:
-	TeacherLessonInfo(std::wstring_view teacher_name, std::wstring_view subject_name, std::wstring_view subject_type, unsigned day, std::wstring_view time, bool is_even_week, unsigned auditorium_number) :
+	TeacherLessonInfo(std::wstring_view teacher_name, std::wstring_view subject_name, std::wstring_view subject_type, unsigned day, std::wstring_view time, bool is_even_week, std::wstring auditorium_number) :
 		teacher_name{ teacher_name }, subject_name{ subject_name }, subject_type{ subject_type }, day{ day }, time{ time }, is_even_week{ is_even_week }, auditorium_number{ auditorium_number } {
 	}
 
@@ -34,7 +34,7 @@ public:
 		return is_even_week;
 	}
 
-	unsigned GetAuditorium() const {
+	std::wstring GetAuditorium() const {
 		return auditorium_number;
 	}
 private:
@@ -44,7 +44,7 @@ private:
 	unsigned day;
 	std::wstring time;
 	bool is_even_week = false;
-	unsigned auditorium_number;
+	std::wstring auditorium_number;
 };
 
 } // namespace core
