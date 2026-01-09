@@ -1,0 +1,7 @@
+{
+  "dependencies": [
+    "boost",
+    "boost-url",
+    "openssl"
+  ]
+}
