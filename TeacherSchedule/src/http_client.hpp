@@ -1,180 +1,334 @@
 #pragma once
 
-#ifndef BOOST_BIND_GLOBAL_PLACEHOLDERS
-#define BOOST_BIND_GLOBAL_PLACEHOLDERS
-#endif
-
 #include <iostream>
-#include <istream>
-#include <ostream>
-#include <functional>
 #include <memory>
+#include <limits>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <cstdlib>
 
-#include <boost/beast.hpp>
+#define BOOST_BEAST_USE_STD_STRING_VIEW
+
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
+#include <boost/beast.hpp>
 #include <boost/url.hpp>
-#include <boost/bind.hpp>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+
+namespace net = boost::asio;
+namespace sys = boost::system;
+namespace beast = boost::beast;
+namespace ssl = net::ssl;
+namespace http = beast::http;
+using tcp = net::ip::tcp;
 
 namespace http_client {
 
-namespace net = boost::asio;
-namespace beast = boost::beast;
-namespace http = beast::http;
-namespace ssl = net::ssl;
-namespace urls = boost::urls;
-namespace sys = boost::system;
-using tcp = net::ip::tcp;
-
-class HttpClientBase {
+class Session : public std::enable_shared_from_this<Session> {
 public:
-//	* Get thiss class ptr virtual method
-	virtual std::shared_ptr<HttpClientBase> GetPtr() = 0;
+    Session (net::io_context & io) : io_{io}, stream_{io, ssl_ctx_}, resolver_{io} {
+        ssl_ctx_.set_default_verify_paths();
 
-//	* Constuctor
-	HttpClientBase(net::io_context & io, const urls::url & url, ssl::context & ctx)
-	: resolver_{io}, url_{url}, ssl_stream_{io, ctx} {
-		std::string host = url.host().c_str();
-		
-		if (!SSL_set_tlsext_host_name(ssl_stream_.native_handle(), host.c_str())) {
-			sys::error_code ec{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
-			throw sys::system_error{ec};
-		}
-	}
+        // Try to load CA bundle from environment variables if provided.
+        if (const char * cafile = std::getenv("SSL_CERT_FILE")) {
+            try {
+                ssl_ctx_.load_verify_file(cafile);
+                std::cerr << "[INFO]: loaded CA file from SSL_CERT_FILE: " << cafile << std::endl;
+            } catch (const std::exception & e) {
+                std::cerr << "[WARN]: failed to load SSL_CERT_FILE '" << cafile << "': " << e.what() << std::endl;
+            }
+        } else if (const char * cafile2 = std::getenv("CURL_CA_BUNDLE")) {
+            try {
+                ssl_ctx_.load_verify_file(cafile2);
+                std::cerr << "[INFO]: loaded CA file from CURL_CA_BUNDLE: " << cafile2 << std::endl;
+            } catch (const std::exception & e) {
+                std::cerr << "[WARN]: failed to load CURL_CA_BUNDLE '" << cafile2 << "': " << e.what() << std::endl;
+            }
+        }
 
-protected:
-	virtual void Write() = 0;
-	virtual void Read() = 0;
-	virtual void HandleRequest() = 0;
+        stream_.set_verify_mode(ssl::verify_peer);
 
-//	* Resolve handler method
-	void OnResolve(const sys::error_code & ec, tcp::resolver::results_type results) {
-		if (!ec) {
-			net::async_connect(	ssl_stream_.lowest_layer(),
-								results.begin(),
-								results.end(),
-								[self = GetPtr()] (const sys::error_code & ec, auto endpoints) {
-									self->OnConnect(ec);
-								});
-		} else {
-			throw std::runtime_error(ec.what());
-		}
- 	}
+    }
 
-//	* Connect handler method
-	void OnConnect(const sys::error_code & ec) {
-		if (!ec) {
-			ssl_stream_.set_verify_mode(ssl::verify_peer);
-			ssl_stream_.set_verify_callback([self = GetPtr()] (bool preverified, ssl::verify_context & ctx) {
-				return self->PreverifyCertificate(preverified, ctx);
-			});
-			
-			ssl_stream_.async_handshake(ssl::stream_base::client, [self = GetPtr()] (const sys::error_code & ec) {
-				self->OnHandshake(ec);
-			});
-		} else {
-			throw std::runtime_error(ec.what());
-		}
-	}
+    Session (net::io_context & io, int redirect_count)
+        : io_{io}, stream_{io, ssl_ctx_}, resolver_{io}, redirects_count_{redirect_count} {
+        ssl_ctx_.set_default_verify_paths();
 
-//	* Handshake handler method
-	void OnHandshake(const sys::error_code & ec) {
-		if (!ec) {
-			Write();
-		} else {
-			throw std::runtime_error(ec.what());
-		}
-	}
+        if (const char * cafile = std::getenv("SSL_CERT_FILE")) {
+            try {
+                ssl_ctx_.load_verify_file(cafile);
+                std::cerr << "[INFO]: loaded CA file from SSL_CERT_FILE: " << cafile << std::endl;
+            } catch (const std::exception & e) {
+                std::cerr << "[WARN]: failed to load SSL_CERT_FILE '" << cafile << "': " << e.what() << std::endl;
+            }
+        } else if (const char * cafile2 = std::getenv("CURL_CA_BUNDLE")) {
+            try {
+                ssl_ctx_.load_verify_file(cafile2);
+                std::cerr << "[INFO]: loaded CA file from CURL_CA_BUNDLE: " << cafile2 << std::endl;
+            } catch (const std::exception & e) {
+                std::cerr << "[WARN]: failed to load CURL_CA_BUNDLE '" << cafile2 << "': " << e.what() << std::endl;
+            }
+        }
 
-//	* Write handler method
-	void OnWrite(const sys::error_code & ec, std::size_t transferred_bytes) {
-		if (!ec) {
-			Read();
-		} else {
-			throw std::runtime_error(ec.what());
-		}
-	}
+        stream_.set_verify_mode(ssl::verify_peer);
 
-//	* Read handler method
-	void OnRead(const sys::error_code & ec, std::size_t transferred_bytes) {
-		if (!ec) {
-			HandleRequest();
-		} else {
-			throw std::runtime_error(ec.what());
-		}
-	}
+    }
 
-//	* Pre-verify certificate callback method
-	bool PreverifyCertificate(bool preverified, ssl::verify_context & ctx) {
-		std::cout << "Preverify certificate status: " << (preverified ? "true" : "false") << std::endl;
+    void Run(const std::string & host,
+             const std::string & port,
+             const std::string & target,
+             const std::string & filename,
+             int version) {
 
-		char subject_name[256];
-		X509 * cert = X509_STORE_CTX_get_current_cert(ctx.native_handle());
-		X509_NAME_oneline(X509_get_subject_name(cert), subject_name, 256);
-        std::cout << "Verifying " << subject_name << "\n";
+        filename_ = filename;
+        host_ = host;
+        port_ = port;
+        target_ = target;
+        version_ = version;
 
-		return preverified;
-	}
-	
-	tcp::resolver resolver_;
-	urls::url url_;
-	ssl::stream<tcp::socket> ssl_stream_;
-};
+        sys::error_code ec;
+        file_parser_.body_limit(std::numeric_limits<std::uint64_t>::max());
+        file_parser_.get().body().open(filename.c_str(), beast::file_mode::write, ec);
+        if (ec) {
+            std::cerr << "[ERROR]: couldn't open file: " << ec.message() << std::endl;
+            return;
+        }
 
-template <typename Request, typename Response, typename Handler>
-class HttpClient : public HttpClientBase, public std::enable_shared_from_this<HttpClient<Request, Response, Handler>> {
+        if (!SSL_set_tlsext_host_name(stream_.native_handle(), host.c_str())) {
+            std::cerr << "[ERROR]: couldn't set SNI" << std::endl;
+            return;
+        }
 
-public:
-//	* Create
-	static std::shared_ptr<HttpClient> Create(
-		net::io_context & io,
-		const urls::url & url,
-		ssl::context & ctx,
-		Request req,
-		Response res,
-		Handler handler
-	) {
-		
-		return std::make_shared<HttpClient<Request, Response, Handler>>(io, url, ctx, std::move(req), std::move(res), std::move(handler));
+        req_.version(version);
+        req_.method(http::verb::get);
+        req_.target(target);
+        req_.set(http::field::host, host);
+        req_.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
+        req_.set(http::field::accept, "*/*");
 
-	}
-	
-//	* Constuctor
-	HttpClient(net::io_context & io, const urls::url & url, ssl::context & ctx, Request req, Response res, Handler handler)
-	: HttpClientBase{io, url, ctx}, req_{std::move(req)}, res_{std::move(res)}, handler_{std::move(handler)} {}
+        // set verify callback so we can inspect and optionally override verification
+        stream_.set_verify_callback(std::bind(&Session::verify_certificate, this, std::placeholders::_1, std::placeholders::_2));
 
-//	* Get this class ptr method
-	std::shared_ptr<HttpClientBase> GetPtr() override {
-		return this->shared_from_this();
-	}
-	
-	void SendRequest() {
-		resolver_.async_resolve(url_.host(), "https", [self = this->shared_from_this()] (const sys::error_code & ec, tcp::resolver::results_type results) {
-			self->OnResolve(ec, results);
-		});
-	}
-
-protected:
-	void Write() override {
-		http::async_write(ssl_stream_, req_, [self = this->shared_from_this()] (const sys::error_code & ec, size_t bytes_transferred) {
-			self->OnWrite(ec, bytes_transferred);
-		});
-	}
-
-	void Read() override {
-		http::async_read(ssl_stream_, read_buff_, res_, [self = this->shared_from_this()] (const sys::error_code & ec, size_t bytes_transferred) {
-			self->OnRead(ec, bytes_transferred);
-		});
-	}
-
-	void HandleRequest() override {
-		handler_(std::move(res_));
-	}
+        resolver_.async_resolve(host.c_str(),
+                                port.c_str(),
+                                std::bind(&Session::OnResolve, this->shared_from_this(),
+                                std::placeholders::_1,
+                                std::placeholders::_2)
+                            );
+    }
 private:
-	Request req_;
-	Response res_;
-	Handler handler_;
-	beast::flat_buffer read_buff_;
+    void OnResolve(const sys::error_code & ec, tcp::resolver::results_type results) {
+        if (ec) {
+            std::cerr << "[ERROR]: couldn't resolve host: " << ec.message() << std::endl;
+            return;
+        }
+
+        net::async_connect(
+            stream_.lowest_layer(),
+            results.begin(),
+            results.end(),
+            std::bind(&Session::OnConnect,
+                      this->shared_from_this(),
+                      std::placeholders::_1)
+                );
+    }
+
+    void OnConnect(const sys::error_code & ec) {
+        if (ec) {
+            std::cerr << "[ERROR]: couldn't connect: " << ec.message() << std::endl;
+            return;
+        }
+
+        stream_.async_handshake(
+            ssl::stream_base::client,
+            std::bind(&Session::OnHandshake,
+                      this->shared_from_this(),
+                      std::placeholders::_1)
+        );
+    }
+
+    void OnHandshake(const sys::error_code & ec) {
+        if (ec) {
+            std::cerr << "[ERROR]: SSL Handshake failed: " << ec.message() << std::endl;
+            return;
+        }
+
+        http::async_write(
+            stream_,
+            req_,
+            std::bind(&Session::OnWrite,
+                      this->shared_from_this(),
+                      std::placeholders::_1,
+                      std::placeholders::_2)
+        );
+    }
+
+    void OnWrite(const sys::error_code & ec, std::size_t bytes_transferred) {
+        if (ec) {
+            std::cerr << "[ERROR]: couldn't write request: " << ec.message() << std::endl;
+            return;
+        }
+        
+        http::async_read_header(
+            stream_,
+            buffer_,
+            file_parser_,
+            std::bind(&Session::OnHeaderRead,
+                      this->shared_from_this(),
+                      std::placeholders::_1,
+                      std::placeholders::_2)
+        );
+    }
+
+    void OnHeaderRead(const sys::error_code & ec, std::size_t bytes_transferred) {
+        if (ec) {
+            std::cerr << "[ERROR]: couldn't read header: " << ec.message() << std::endl;
+            return;
+        }
+
+        const auto & head_res = file_parser_.get();
+        http::status status = head_res.result();
+
+        // Diagnostic output: status and common headers
+        std::cout << "[DEBUG]: HTTP status: " << static_cast<int>(status) << "\n";
+        auto cl = head_res[http::field::content_length];
+        if (!cl.empty()) std::cout << "[DEBUG]: Content-Length: " << cl << "\n";
+        auto te = head_res[http::field::transfer_encoding];
+        if (!te.empty()) std::cout << "[DEBUG]: Transfer-Encoding: " << te << "\n";
+        auto loc = head_res[http::field::location];
+        if (!loc.empty()) std::cout << "[DEBUG]: Location: " << loc << "\n";
+
+        switch (status) {
+            case http::status::moved_permanently:
+            case http::status::found:
+            case http::status::see_other:
+            case http::status::temporary_redirect:
+            case http::status::permanent_redirect:
+                if (++redirects_count_ >= 5) {
+                    std::cerr << "[ERROR]: too many redirects" << std::endl;
+                } else {
+                    file_parser_.get().body().close();
+
+                    auto location = head_res[http::field::location];
+
+                    if (location.empty()) {
+                        std::cerr << "[ERROR]: redirect status but no Location header" << std::endl;
+                    } else {
+                        auto r = boost::urls::parse_uri_reference(location);
+                        if (!r) {
+                            std::cerr << "[ERROR]: failed to parse Location header: " << location << std::endl;
+                        } else {
+                            auto u = r.value();
+
+                            std::string new_host{u.host().empty() ? std::string(host_) : std::string(u.host())};
+                            std::string new_port{u.has_port() ? std::string(u.port()) : std::string(port_)};
+
+                            std::string new_target;
+                            if (u.encoded_path().empty()) {
+                                // relative reference or empty path: use the location string directly
+                                new_target = std::string(location);
+                            } else {
+                                new_target = std::string{u.encoded_path()};
+                                if (u.has_query()) {
+                                    new_target += "?";
+                                    new_target += std::string{u.encoded_query()};
+                                }
+                            }
+
+                            std::make_shared<Session>(io_, redirects_count_)->Run(
+                                new_host,
+                                new_port,
+                                new_target,
+                                filename_,
+                                req_.version()
+                            );
+                        }
+                    }
+
+                }
+
+                stream_.async_shutdown(
+                    std::bind(&Session::OnShutdown,
+                                this->shared_from_this(),
+                                std::placeholders::_1)
+                );
+
+                return;
+                break;
+        }
+
+        http::async_read(
+            stream_,
+            buffer_,
+            file_parser_,
+            std::bind(&Session::OnBodyRead,
+                      this->shared_from_this(),
+                      std::placeholders::_1,
+                      std::placeholders::_2)
+        );
+    }
+
+    void OnBodyRead(const sys::error_code & ec, std::size_t bytes_transferred) {
+        if (ec) {
+            std::cerr << "[ERROR]: couldn't read body" << std::endl;
+            return;
+        }
+
+        file_parser_.get().body().close();
+
+        // Try to report downloaded file size
+        try {
+            auto sz = std::filesystem::file_size(filename_);
+            std::cout << "[INFO]: downloaded " << sz << " bytes to " << filename_ << std::endl;
+        } catch (const std::exception & e) {
+            std::cout << "[WARN]: unable to get file size: " << e.what() << std::endl;
+        }
+
+        stream_.async_shutdown(
+            std::bind(&Session::OnShutdown,
+                      this->shared_from_this(),
+                      std::placeholders::_1)
+        );
+    }
+
+    void OnShutdown(const sys::error_code & ec) {
+        if (ec) {
+            // Shutdown errors are usually non-fatal here.
+            std::cerr << "[WARN]: shutdown failed" << std::endl;
+        }
+        // Session can now be destroyed; if you need to notify other parts
+        // of the application, do so here.
+    }
+
+    // Verification callback. Returns true when certificate is accepted.
+    // If environment variable SSL_NO_VERIFY=1 is set, verification will be bypassed (for debugging only).
+    bool verify_certificate(bool preverified, ssl::verify_context & ctx) {
+        std::cerr << "[DEBUG]: certificate preverified=" << preverified << std::endl;
+        if (preverified) return true;
+        const char * env = std::getenv("SSL_NO_VERIFY");
+        if (env && std::string(env) == "1") {
+            std::cerr << "[WARN]: SSL verification disabled via SSL_NO_VERIFY=1" << std::endl;
+            return true;
+        }
+        return false;
+    }
+
+    net::io_context & io_;
+    ssl::context ssl_ctx_{ssl::context::sslv23_client};
+    net::ssl::stream<tcp::socket> stream_;
+    tcp::resolver resolver_;
+    http::request<http::string_body> req_;
+    http::response<http::string_body> res_;
+    http::response_parser<http::file_body> file_parser_;
+    beast::flat_buffer buffer_;
+    std::string filename_;
+    int redirects_count_ = 0;
+    std::string host_;
+    std::string port_;
+    std::string target_;
+    int version_;
 };
 
 } // namespace http_client
